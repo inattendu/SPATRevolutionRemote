@@ -59,6 +59,36 @@ ces widgets : il ne peut pas servir de source du correctif.
    est `[x, y]` : `value[2]` est `undefined` et écrasait le Z. Corrigé en lisant le vrai Z du
    fader du pad courant (`get("fader_srcDual1_z")` / `get("fader_srcDual2_z")`).
 
+## Bug de synchro inter-navigateurs (onglet main non mis à jour)
+
+**Symptôme** — Bouger une source depuis l'onglet **multi-source** (ou un pad **Dual**) la déplace
+bien dans SPAT, mais l'onglet **main** d'un *autre* navigateur connecté ne suit pas.
+
+**Cause** — Dans un `set()` de script, le flag `send` gouverne **deux** choses à la fois :
+l'émission OSC imbriquée **et** le message de synchronisation inter-clients (`syncOsc`). Le code
+d'Open Stage Control :
+
+```js
+// setValue d'un widget (slider/xy/…)
+l.sync && this.changed(l);                       // exécute onValue + liens par id
+l.send && this.sendValue(null, {syncOnly:true}); // <-- émet le syncOsc (client-sync)
+```
+
+Les 5 ponts vers le pad principal utilisaient `set("variable_xyzpad", …, {send:false})` : le
+`send:false` empêchait donc **aussi** la client-sync. À l'inverse, le pad principal `xy_main` et
+les faders `spat_position*` font le même `set("variable_xyzpad", …)` **sans** `{send:false}` —
+c'est pourquoi bouger le main se synchronise entre navigateurs, mais pas les onglets Dual/multi.
+
+Réception côté autre client : `Osc.receive` applique `setValue(v, {send:false, sync:true})` →
+l'`onValue` s'exécute (met à jour le main) mais les `send()` imbriqués sont neutralisés
+(`send:false`) → pas d'écho OSC, pas de boucle.
+
+**Correctif** — Retirer `{send:false}` des 5 ponts `set("variable_xyzpad", …)`
+(`xy_Dual1`, `xy_Dual2`, `fader_srcDual1_z`, `fader_srcDual2_z`, `multixy_1`), pour les aligner
+sur le comportement de référence de `xy_main`. Les handlers de feedback OSC en
+`{script: false, send: false}` (dans `update_*` et `variable_xyzpad`) ne sont **pas** touchés :
+le dump de SPAT atteint déjà tous les clients, les synchroniser depuis là créerait des échos.
+
 ## Application du correctif
 
 Script idempotent, avec backup horodaté et vérification des motifs avant substitution :
