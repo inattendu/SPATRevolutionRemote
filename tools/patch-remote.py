@@ -118,6 +118,24 @@ REPLACEMENTS = {
     ],
 }
 
+# Patches de propriete : (id_widget, prop, ancienne_valeur, nouvelle_valeur).
+# Applique a TOUTES les instances portant cet id (la session duplique certains
+# widgets left/right sous le meme id). Idempotent : saute si deja a jour.
+#
+# dropdown_srcSelMain / switch_roomSelect ont pour adresse `/source(ou room)/
+# @{this.value}/dump`. Ils s'en servent pour ENVOYER la requete de dump (dans
+# onValue), mais cette adresse les fait aussi ECOUTER sur `/source/X/dump`.
+# Quand deux clients selectionnent la meme source, chacun recoit la requete de
+# dump de l'autre (diffusee car send() force le bypass) : message sans argument
+# -> setValue(null) -> la selection de l'autre client est ecrasee, et le pad ne
+# suit plus rien (l'adresse `/source/@{srcSelMain}/xyz` ne resout plus).
+# SPAT ne repond jamais SUR /dump (il renvoie /xyz, /aed, ... par parametre),
+# donc cette ecoute n'a aucune utilite : on met l'adresse a `auto`.
+PROP_PATCHES = [
+    ("dropdown_srcSelMain", "address", "/source/@{this.value}/dump", "auto"),
+    ("switch_roomSelect", "address", "/room/@{this.value}/dump", "auto"),
+]
+
 
 def iter_widgets(node):
     """Parcours recursif de l'arbre de widgets, yield chaque dict widget."""
@@ -175,6 +193,30 @@ def apply_patch(data):
             script = script.replace(old, new)
             changes.append((wid, idx))
         w["onValue"] = script
+
+    # Patches de propriete (toutes les instances portant l'id).
+    for wid, prop, old, new in PROP_PATCHES:
+        seen = applied = 0
+        for w in iter_widgets(content):
+            if w.get("id") != wid:
+                continue
+            seen += 1
+            cur = w.get(prop)
+            if cur == new:
+                continue
+            if cur != old:
+                raise SystemExit(
+                    f"{wid}.{prop} : valeur inattendue {cur!r} (attendu {old!r}) ; "
+                    "patch annule pour ne rien corrompre."
+                )
+            w[prop] = new
+            applied += 1
+        if seen == 0:
+            raise SystemExit(f"{wid} introuvable ; patch annule.")
+        if applied:
+            changes.append((f"{wid}.{prop}", applied))
+        else:
+            warnings.append(f"{wid}.{prop} : deja a jour, ignore")
     return changes, warnings
 
 
@@ -223,6 +265,10 @@ def main():
         total = len(REPLACEMENTS[wid])
         state = "deja OK" if applied == 0 else f"{applied}/{total} corrige(s)"
         print(f"  - {wid:<18} {state}")
+    for wid, prop, _old, _new in PROP_PATCHES:
+        key = f"{wid}.{prop}"
+        n = sum(a for c, a in changes if c == key)
+        print(f"  - {key:<26} {'deja OK' if n == 0 else f'{n} instance(s) corrigee(s)'}")
     for w in warnings:
         print(f"    (info) {w}")
 

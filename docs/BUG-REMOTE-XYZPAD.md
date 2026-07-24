@@ -95,6 +95,28 @@ chaîne `'touch'` est stockée dans `variable_xyzpad` → le pad reçoit du non-
 **désactivé**. (Les faders, eux, ignorent silencieusement les valeurs non numériques — seules les
 `variable` sont vulnérables.)
 
+## Bug : deux clients sur le même Main, même source → l'un décroche
+
+**Symptôme** — Les deux fenêtres sur l'onglet **Main**. Dès qu'elles sélectionnent la **même**
+source, l'autre fenêtre « bascule » sur un autre élément : le pad reste figé sur la position
+initiale de la source et ne suit plus aucun mouvement.
+
+**Cause** — `dropdown_srcSelMain` (et `switch_roomSelect` pour la Room) ont pour adresse
+`/source/@{this.value}/dump`. Ils s'en servent pour **envoyer** la requête de dump dans leur
+`onValue` (`send('/source/' + value + '/dump')`), mais cette adresse les fait aussi **écouter**
+sur `/source/X/dump`. Le `send()` d'un script force l'émission malgré `bypass: true`, donc la
+requête est **diffusée aux autres clients** (client-sync). Quand deux clients pointent la même
+source X, chacun reçoit la requête de dump de l'autre sur `/source/X/dump`. Ce message est **sans
+argument** → `Osc.receive` applique `setValue(null)` → la sélection du dropdown est écrasée. Le pad
+Main, dont l'adresse est `/source/@{dropdown_srcSelMain}/xyz`, ne résout plus et se fige.
+
+SPAT ne répond **jamais** sur `/dump` (le dump revient sous forme de messages par paramètre :
+`/xyz`, `/aed`, `/gain`… — vérifié à la capture). Cette écoute sur `/dump` est donc inutile.
+
+**Correctif** — Mettre l'`address` de `dropdown_srcSelMain` et `switch_roomSelect` à `auto`
+(toutes les instances left/right). L'envoi du dump reste dans l'`onValue` ; seule l'écoute nuisible
+sur `/dump` disparaît. Chaque client garde sa propre sélection.
+
 ## Application du correctif
 
 Script idempotent, avec backup horodaté et vérification des motifs avant substitution :
