@@ -117,6 +117,36 @@ SPAT ne répond **jamais** sur `/dump` (le dump revient sous forme de messages p
 (toutes les instances left/right). L'envoi du dump reste dans l'`onValue` ; seule l'écoute nuisible
 sur `/dump` disparaît. Chaque client garde sa propre sélection.
 
+## Bug : le bouton Select clignote et ne reste pas enclenché
+
+**Symptôme** — Cliquer le bouton **Select** sur l'onglet Main le fait clignoter ; il ne reste
+jamais enfoncé. (Sélectionner via le **pad** — appui/relâché — fonctionne, car les pads envoient
+`send('/source/N/select', 1)` avec la valeur.)
+
+**Cause** — `button_mainSelect.onValue` envoyait la sélection **sans argument** :
+`send('/source/' + src + '/select')`. Capture OSC à l'appui, SPAT interprète un select sans
+argument comme **[0]** (désélection) :
+
+```text
+Remote->SPAT | /source/1/select | ,   | []     (sans argument)
+SPAT->Remote | /source/1/select | ,i  | [0]
+```
+
+Le bouton passe donc à 1 localement au clic, envoie sans valeur, SPAT répond [0], le bouton
+revient à 0 → clignotement.
+
+**Correctif** — Envoyer la valeur : `send('/source/' + src + '/select', 1)`. Le bouton reçoit
+alors [1] en retour et reste enclenché.
+
+## Note : mode « Selection » (client qui suit la source sélectionnée)
+
+Le dropdown Main a une option **« Selection » = index -1**. Aucun script ne gère ce -1 : le mode
+repose entièrement sur le feedback moteur. Il faut activer **« Send current selection messages »**
+dans les réglages **généraux** du SPAT Remote server (pas dans le panneau OSC Socket). SPAT émet
+alors la source sélectionnée sur l'alias `-1` : capture confirmée, `/source/-1/xyz` et
+`/source/-1/aed` arrivent en **valeurs numériques** (les chaînes `'touch'` ne polluent que les
+paramètres EQ, pas la position). Le mode « Selection » est donc viable une fois ce toggle activé.
+
 ## Application du correctif
 
 Script idempotent, avec backup horodaté et vérification des motifs avant substitution :

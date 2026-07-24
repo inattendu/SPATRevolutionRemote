@@ -116,6 +116,19 @@ REPLACEMENTS = {
         ),
         XYZ_MULTI,
     ],
+    # Bouton Select qui clignote : `button_mainSelect` emettait
+    # `/source/N/select` SANS valeur. SPAT interprete un select sans argument
+    # comme [0] (deselection), donc le bouton ne reste jamais enclenche (il
+    # oscille entre 1 local et 0 renvoye). Capture a l'appui :
+    #   Remote->SPAT /source/1/select ,  []   (sans arg)
+    #   SPAT->Remote /source/1/select ,i [0]
+    # Correctif : envoyer la valeur 1.
+    "button_mainSelect": [
+        (
+            "send('/source/' + src + '/select')",
+            "send('/source/' + src + '/select', 1)",
+        ),
+    ],
 }
 
 # Patches de propriete : (id_widget, prop, ancienne_valeur, nouvelle_valeur).
