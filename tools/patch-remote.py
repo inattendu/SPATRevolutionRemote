@@ -177,6 +177,27 @@ GUARD_WIDGETS = [
     "variable_xyDual2",
 ] + [f"variable_xyMulti{i}" for i in range(1, 9)]
 
+# Correctif detection + navigation du Mixer. Les boutons "Refresh List" (6
+# instances de button_refreshSources + button_refreshSources1) demandaient les
+# noms `/source/*/name/?` EN MEME TEMPS que `/remotenumber/?` : les 33 noms
+# arrivaient avant que le matrix de recepteurs (matrix_varObjNameMain, taille
+# = @{variable_srcCount}) soit reconstruit -> la plupart etaient rates (course),
+# d'ou seules quelques tracks detectees. De plus le refresh ne redemandait jamais
+# le count -> variable_srcCount perime -> matrix sous-dimensionne et navigation
+# (clamp sur srcCount) cassee. Correctif applique a TOUTES les instances :
+# redemander le count, et DIFFERER la requete de noms de 600 ms.
+# Idempotence via le marqueur (le count/? n'existe dans aucun refresh d'origine).
+ONVALUE_PATCHES = [
+    {
+        "old": "send('/source/*/name/?');",
+        "new": (
+            "send('/global/project/source/count/?');\n"
+            "setTimeout(function(){ send('/source/*/name/?'); }, 600);"
+        ),
+        "marker": "/global/project/source/count/?",
+    },
+]
+
 
 def iter_widgets(node):
     """Parcours recursif de l'arbre de widgets, yield chaque dict widget."""
@@ -277,6 +298,28 @@ def apply_patch(data):
             changes.append((f"{wid}.guard", applied))
         else:
             warnings.append(f"{wid}.guard : deja pose, ignore")
+
+    # Patches onValue appliques a toutes les instances contenant le motif.
+    for pt in ONVALUE_PATCHES:
+        old, new, marker = pt["old"], pt["new"], pt["marker"]
+        seen = applied = 0
+        for w in iter_widgets(content):
+            ov = w.get("onValue")
+            if not isinstance(ov, str) or old not in ov:
+                continue
+            seen += 1
+            if marker in ov:
+                continue
+            w["onValue"] = ov.replace(old, new, 1)
+            applied += 1
+        if seen == 0:
+            raise SystemExit(
+                f"onValue : motif {old!r} introuvable ; patch annule."
+            )
+        if applied:
+            changes.append((f"onValue[{old[:22]}]", applied))
+        else:
+            warnings.append(f"onValue[{old[:22]}] : deja applique, ignore")
     return changes, warnings
 
 
@@ -333,6 +376,10 @@ def main():
         key = f"{wid}.guard"
         n = sum(a for c, a in changes if c == key)
         print(f"  - {key:<26} {'deja OK' if n == 0 else f'{n} pose(s)'}")
+    for pt in ONVALUE_PATCHES:
+        key = f"onValue[{pt['old'][:22]}]"
+        n = sum(a for c, a in changes if c == key)
+        print(f"  - {key:<26} {'deja OK' if n == 0 else f'{n} instance(s) corrigee(s)'}")
     for w in warnings:
         print(f"    (info) {w}")
 

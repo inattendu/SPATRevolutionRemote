@@ -178,6 +178,36 @@ passent. Comportement normal inchangé (les mises à jour internes passent des t
 Ce garde protège aussi définitivement de tout `'touch'` qui arriverait sur `/xyz`/`/aed` d'une
 vraie source, quel que soit le réglage moteur.
 
+## Bug : Mixer — détection des tracks incomplète et navigation cassée
+
+**Symptôme** — L'onglet Mixer ne détecte que quelques tracks (les autres bandes vides), et
+« Previous / Next 8 Tracks » ne navigue pas.
+
+**Cause — confirmée par capture** (`mixer.pcap`). SPAT reporte pourtant **tout** correctement :
+`/global/project/source/remotenumber` = `[1..33]`, et **33 `/source/N/name`** reviennent. C'est
+la session qui n'en capte que quelques-uns, pour deux raisons :
+
+1. **Course.** Les 7 boutons « Refresh List » (`button_refreshSources` ×6 + `button_refreshSources1`)
+   demandaient `/source/*/name/?` **en même temps** que `/remotenumber/?`. Or les récepteurs de
+   noms sont créés par un **matrix dynamique** (`matrix_varObjNameMain`, `quantity =
+   @{variable_srcCount}`, une cellule par source écoutant `/source/N/name`). Les 33 noms
+   arrivaient **avant** que ce matrix soit reconstruit → la plupart étaient ratés.
+2. **Count périmé.** Le refresh ne redemandait jamais `/global/project/source/count` (seul
+   `tab_main.onCreate` le fait, une fois). `variable_srcCount` restait donc faux → matrix
+   sous-dimensionné (détection cappée) **et** navigation cassée (le clamp
+   `incValue ∈ [0, srcCount-8]` déraille si `srcCount` est faux).
+
+**Correctif** — Dans chaque refresh, redemander le count et **différer** la requête de noms le
+temps que le matrix se reconstruise :
+
+```js
+send('/global/project/source/count/?');
+setTimeout(function(){ send('/source/*/name/?'); }, 600);
+```
+
+Le count et les `remotenumber` sont ainsi rafraîchis d'abord, le matrix crée ses N récepteurs,
+puis les noms sont demandés et **tous captés**. Corrige la détection **et** la navigation.
+
 ## Application du correctif
 
 Script idempotent, avec backup horodaté et vérification des motifs avant substitution :
