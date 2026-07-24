@@ -22,10 +22,20 @@ Le patch :
      principal. Les 5 ponts locaux `set("variable_xyzpad", ..., {send:false})` sont
      laisses tels quels (mise a jour de l'ecran local uniquement).
 
-Note : le ping-pong de la sortie SPAT NE doit PAS servir a synchroniser. Il renvoie
-les marqueurs `'touch'`/`'release'` sous forme de CHAINE sur `/xyz`/`/aed`, or les
-widgets `variable` acceptent tout type sans controle : la chaine empoisonne le pad,
-qui se clampe a (-1, -1). Ce correctif rend le ping-pong inutile.
+Le patch (suite) :
+  5. corrige le clignotement du bouton Select (`button_mainSelect` envoyait
+     `/source/N/select` SANS valeur ; SPAT lit [0]) -> envoi de la valeur 1 ;
+  6. neutralise deux ecoutes `/dump` nuisibles (dropdown_srcSelMain /
+     switch_roomSelect passes en address `auto`) qui ecrasaient la selection
+     d'un autre client sur la meme source ;
+  7. pose un garde anti-poison en tete des recepteurs de position : SPAT emet les
+     marqueurs 'touch'/'release' comme CHAINES sur /xyz et /aed (Touch/release
+     actif), y compris sur /source/-1/* en mode Selection -> le pad tremblait
+     entre la vraie position et (-1,-1). Le garde ignore tout non-numerique.
+
+Note : le ping-pong de la sortie SPAT NE doit PAS servir a synchroniser -- il force
+le retour des messages a l'emetteur (le Remote), chaines 'touch' comprises, et
+empoisonnait le pad. Il doit rester OFF ; le garde (7) protege de toute facon.
 
 Idempotent : une session deja patchee est detectee, aucun backup superflu n'est
 cree. Le motif attendu est verifie avant chaque substitution ; si une version
@@ -149,6 +159,24 @@ PROP_PATCHES = [
     ("switch_roomSelect", "address", "/room/@{this.value}/dump", "auto"),
 ]
 
+# Garde anti-poison sur les recepteurs de position. Les widgets `variable`
+# acceptent n'importe quel type sans controle. Or SPAT, quand Touch/release est
+# actif en sortie, emet les marqueurs 'touch'/'release' comme des CHAINES sur les
+# adresses de position (capture a l'appui, y compris /source/-1/xyz et /aed en
+# mode Selection). Ces chaines corrompent le pad, qui se clampe a (-1, -1) en
+# alternance avec la vraie position -> tremblement. On prefixe donc chaque
+# onValue d'un garde qui ignore toute valeur non numerique.
+GUARD_STMT = (
+    "if (!Array.isArray(value) || typeof value[0] !== 'number') return;\n"
+)
+GUARD_MARKER = "!Array.isArray(value) || typeof value[0] !== 'number'"
+GUARD_WIDGETS = [
+    "variable_xyzpad",
+    "variable_aedpad",
+    "variable_xyDual1",
+    "variable_xyDual2",
+] + [f"variable_xyMulti{i}" for i in range(1, 9)]
+
 
 def iter_widgets(node):
     """Parcours recursif de l'arbre de widgets, yield chaque dict widget."""
@@ -230,6 +258,25 @@ def apply_patch(data):
             changes.append((f"{wid}.{prop}", applied))
         else:
             warnings.append(f"{wid}.{prop} : deja a jour, ignore")
+
+    # Garde anti-poison : prefixe onValue des recepteurs de position.
+    for wid in GUARD_WIDGETS:
+        seen = applied = 0
+        for w in iter_widgets(content):
+            if w.get("id") != wid:
+                continue
+            seen += 1
+            script = w.get("onValue", "")
+            if GUARD_MARKER in script:
+                continue
+            w["onValue"] = GUARD_STMT + script
+            applied += 1
+        if seen == 0:
+            raise SystemExit(f"{wid} introuvable ; patch annule.")
+        if applied:
+            changes.append((f"{wid}.guard", applied))
+        else:
+            warnings.append(f"{wid}.guard : deja pose, ignore")
     return changes, warnings
 
 
@@ -282,6 +329,10 @@ def main():
         key = f"{wid}.{prop}"
         n = sum(a for c, a in changes if c == key)
         print(f"  - {key:<26} {'deja OK' if n == 0 else f'{n} instance(s) corrigee(s)'}")
+    for wid in GUARD_WIDGETS:
+        key = f"{wid}.guard"
+        n = sum(a for c, a in changes if c == key)
+        print(f"  - {key:<26} {'deja OK' if n == 0 else f'{n} pose(s)'}")
     for w in warnings:
         print(f"    (info) {w}")
 

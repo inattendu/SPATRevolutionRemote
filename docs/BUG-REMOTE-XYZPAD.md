@@ -147,6 +147,37 @@ alors la source sélectionnée sur l'alias `-1` : capture confirmée, `/source/-
 `/source/-1/aed` arrivent en **valeurs numériques** (les chaînes `'touch'` ne polluent que les
 paramètres EQ, pas la position). Le mode « Selection » est donc viable une fois ce toggle activé.
 
+## Bug : le pad tremble en mode « Selection » quand la source bouge
+
+**Symptôme** — Un client en mode « Selection » (dropdown Main = -1) : quand la source
+sélectionnée bouge (dans SPAT, une timeline, un autre client…), son pad **tremble**.
+
+**Cause — confirmée par capture** (`minus1.pcap`, 2122 messages SPAT→Remote, **0** Remote→SPAT,
+donc pas de boucle). SPAT, avec **Touch/release** actif en sortie, émet les marqueurs
+`'touch'`/`'release'` comme des **chaînes** sur les adresses de position, **y compris sur l'alias
+`-1`** :
+
+```text
+SPAT->Remote | /source/-1/aed | ,s   | 'touch'          <- chaîne
+SPAT->Remote | /source/-1/aed | ,fff | [137.48, 0.0, …]  <- vraie position
+```
+
+Les widgets `variable` acceptent tout type sans contrôle : `variable_aedpad` / `variable_xyzpad`
+stockent tour à tour la chaîne (→ clamp (-1,-1)) et la vraie position → **tremblement**. Ce n'est
+pas une boucle OSC, c'est du feedback moteur normal mal filtré.
+
+**Correctif** — Poser un **garde anti-poison** en tête de l'`onValue` des 12 récepteurs de
+position (`variable_xyzpad`, `variable_aedpad`, `variable_xyMulti1..8`, `variable_xyDual1/2`) :
+
+```js
+if (!Array.isArray(value) || typeof value[0] !== 'number') return;
+```
+
+Les `'touch'`/`'release'` (et tout non-numérique) sont ignorés ; seules les positions numériques
+passent. Comportement normal inchangé (les mises à jour internes passent des tableaux `[x,y,z]`).
+Ce garde protège aussi définitivement de tout `'touch'` qui arriverait sur `/xyz`/`/aed` d'une
+vraie source, quel que soit le réglage moteur.
+
 ## Application du correctif
 
 Script idempotent, avec backup horodaté et vérification des motifs avant substitution :
