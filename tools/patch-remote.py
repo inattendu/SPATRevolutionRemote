@@ -13,13 +13,19 @@ Le patch :
   1. rend defensives les lectures `get("variable_xyzpad")[i]` (fallback [0,0,0]) ;
   2. corrige le Y ecrase par X dans les faders Z des Dual ([0],[0] -> [0],[1]) ;
   3. remplace le `value[2]` inexistant d'un pad XY par le vrai Z du fader jumeau ;
-  4. retablit la synchro inter-navigateurs : les ponts Dual/multixy vers le pad
-     principal utilisaient `set("variable_xyzpad", ..., {send:false})`, or dans un
-     `set()` de script le flag `send` gouverne aussi le message de client-sync
-     (`syncOsc`). Consequence : bouger une source depuis les onglets Dual/multi ne
-     mettait PAS a jour l'onglet main des autres clients connectes. Le pad principal
-     `xy_main` et les faders `spat_position*` font le meme `set` SANS `{send:false}`
-     et se synchronisent ; on aligne les 5 ponts sur ce comportement de reference.
+  4. retablit la synchro inter-navigateurs : `multixy_1` et `xy_Dual1/2` emettaient
+     la position sur `/source/N/xy`, adresse qu'AUCUN widget de la session n'ecoute.
+     Les recepteurs de position (`variable_xyzpad`, `variable_xyMulti1..8`,
+     `variable_xyDual1/2`) ecoutent tous `/source/N/xyz`. On change donc l'emission
+     en `/source/N/xyz` (avec le z courant du point) : le message est alors capte
+     directement par ces recepteurs sur tous les clients, comme le fait deja le pad
+     principal. Les 5 ponts locaux `set("variable_xyzpad", ..., {send:false})` sont
+     laisses tels quels (mise a jour de l'ecran local uniquement).
+
+Note : le ping-pong de la sortie SPAT NE doit PAS servir a synchroniser. Il renvoie
+les marqueurs `'touch'`/`'release'` sous forme de CHAINE sur `/xyz`/`/aed`, or les
+widgets `variable` acceptent tout type sans controle : la chaine empoisonne le pad,
+qui se clampe a (-1, -1). Ce correctif rend le ping-pong inutile.
 
 Idempotent : une session deja patchee est detectee, aucun backup superflu n'est
 cree. Le motif attendu est verifie avant chaque substitution ; si une version
@@ -47,24 +53,27 @@ DEFAULT_TARGET = (
 
 GUARD = '(get("variable_xyzpad") || [0,0,0])'
 
-# Ponts vers le pad principal : le `set("variable_xyzpad", ...)` qui doit se
-# synchroniser vers les autres clients. Le `, {send:false}` bloque la client-sync
-# et doit sauter. On matche la chaine complete (post-fix-crash, avec le GUARD)
-# pour verification/idempotence stricte.
-def _sync_fix(inner):
-    old = 'set("variable_xyzpad", [' + inner + '], {send:false})'
-    new = 'set("variable_xyzpad", [' + inner + '])'
-    return (old, new)
+# Emission de position vers `/source/N/xyz` (au lieu de `/xy`, non ecoute).
+# On reprend le z courant du point : pour un slot Multi via `variable_xyMultiN`,
+# pour un pad Dual via son fader Z. Le pad Main emet deja sur /xyz de la meme facon.
+XYZ_MULTI = (
+    "send(`/source/${src}/xy`, value[i * 2], value[i * 2 + 1]);",
+    "send(`/source/${src}/xyz`, value[i * 2], value[i * 2 + 1], "
+    "(get('variable_xyMulti' + (i + 1)) || [0,0,0])[2]);",
+)
 
 
-XY_INNER = "value[0], value[1], " + GUARD + "[2]"
-Z_INNER = GUARD + "[0], " + GUARD + "[1], value"
-MULTI_INNER = "value[i * 2], value[i * 2 + 1], " + GUARD + "[2]"
+def _xyz_dual(z_id):
+    return (
+        "send('/source/' + src + '/xy', value[0], value[1]);",
+        "send('/source/' + src + '/xyz', value[0], value[1], (get('" + z_id + "') || 0));",
+    )
+
 
 # Substitutions par widget (id -> liste de couples (old, new)).
 # Chaque `old` doit etre present tel quel pour que le patch s'applique ;
 # chaque `new` sert aussi de marqueur d'idempotence. Les regles crash sont
-# listees avant les regles sync (la regle sync matche la chaine deja gardee).
+# listees avant la regle d'emission /xyz.
 REPLACEMENTS = {
     "xy_Dual1": [
         (
@@ -75,7 +84,7 @@ REPLACEMENTS = {
             'get("variable_xyzpad")[2]',
             GUARD + "[2]",
         ),
-        _sync_fix(XY_INNER),
+        _xyz_dual("fader_srcDual1_z"),
     ],
     "xy_Dual2": [
         (
@@ -86,28 +95,26 @@ REPLACEMENTS = {
             'get("variable_xyzpad")[2]',
             GUARD + "[2]",
         ),
-        _sync_fix(XY_INNER),
+        _xyz_dual("fader_srcDual2_z"),
     ],
     "fader_srcDual1_z": [
         (
             '[get("variable_xyzpad")[0], get("variable_xyzpad")[0], value]',
             "[" + GUARD + "[0], " + GUARD + "[1], value]",
         ),
-        _sync_fix(Z_INNER),
     ],
     "fader_srcDual2_z": [
         (
             '[get("variable_xyzpad")[0], get("variable_xyzpad")[0], value]',
             "[" + GUARD + "[0], " + GUARD + "[1], value]",
         ),
-        _sync_fix(Z_INNER),
     ],
     "multixy_1": [
         (
             'get("variable_xyzpad")[2]',
             GUARD + "[2]",
         ),
-        _sync_fix(MULTI_INNER),
+        XYZ_MULTI,
     ],
 }
 

@@ -61,33 +61,39 @@ ces widgets : il ne peut pas servir de source du correctif.
 
 ## Bug de synchro inter-navigateurs (onglet main non mis à jour)
 
-**Symptôme** — Bouger une source depuis l'onglet **multi-source** (ou un pad **Dual**) la déplace
-bien dans SPAT, mais l'onglet **main** d'un *autre* navigateur connecté ne suit pas.
+**Symptôme** — Bouger une source depuis l'onglet **Multi-Source** (ou un pad **Dual**) la déplace
+bien dans SPAT, mais l'onglet **Main** d'un *autre* navigateur connecté ne suit pas — ni l'onglet
+**Source**. L'inverse (Main/Source → Multi) fonctionne.
 
-**Cause** — Dans un `set()` de script, le flag `send` gouverne **deux** choses à la fois :
-l'émission OSC imbriquée **et** le message de synchronisation inter-clients (`syncOsc`). Le code
-d'Open Stage Control :
+**Cause** — Un widget ne met à jour ses homologues (autre client, ou feedback moteur) que si le
+message émis correspond à une **adresse écoutée**. Les récepteurs de position de la session
+écoutent tous `/source/N/xyz` : `variable_xyzpad` (Main), `variable_xyMulti1..8` (Multi),
+`variable_xyDual1/2` (Dual). Or `xy_main` et les faders `spat_position*` émettent bien sur `/xyz`
+(et `/x`,`/y`,`/z`), tandis que `multixy_1` et `xy_Dual1/2` émettaient sur `/source/N/`**`xy`** —
+adresse qu'**aucun widget n'écoute**. D'où l'asymétrie.
 
-```js
-// setValue d'un widget (slider/xy/…)
-l.sync && this.changed(l);                       // exécute onValue + liens par id
-l.send && this.sendValue(null, {syncOnly:true}); // <-- émet le syncOsc (client-sync)
+**Correctif** — Faire émettre `multixy_1` et `xy_Dual1/2` sur `/source/N/xyz` (avec le z courant
+du point : `variable_xyMultiN` pour un slot Multi, le fader `fader_srcDualN_z` pour un Dual), au
+lieu de `/xy`. Le message est alors capté directement par les récepteurs `/xyz` sur **tous** les
+clients — exactement comme le fait déjà le pad Main. Les `onTouch` continuent d'émettre `'touch'`/
+`'release'` sur `/xy` (signalisation de geste vers SPAT, identique au pad Main). Les 5 ponts
+locaux `set("variable_xyzpad", …, {send:false})` sont **laissés tels quels** : ils ne servent qu'à
+mettre à jour l'écran du client local.
+
+**Piège écarté — le ping-pong SPAT.** Tenter de synchroniser en activant le *Ping-pong* de la
+sortie SPAT casse tout : capture OSC à l'appui, SPAT renvoie alors les marqueurs `'touch'`/
+`'release'` sous forme de **chaîne** sur `/source/N/xyz` et `/aed` :
+
+```text
+SPAT->Remote | /source/3/xyz | ,s | 'touch'      ← chaîne, pas des floats
+SPAT->Remote | /source/3/xyz | ,fff | [0.48, 1.0, 0.0]
 ```
 
-Les 5 ponts vers le pad principal utilisaient `set("variable_xyzpad", …, {send:false})` : le
-`send:false` empêchait donc **aussi** la client-sync. À l'inverse, le pad principal `xy_main` et
-les faders `spat_position*` font le même `set("variable_xyzpad", …)` **sans** `{send:false}` —
-c'est pourquoi bouger le main se synchronise entre navigateurs, mais pas les onglets Dual/multi.
-
-Réception côté autre client : `Osc.receive` applique `setValue(v, {send:false, sync:true})` →
-l'`onValue` s'exécute (met à jour le main) mais les `send()` imbriqués sont neutralisés
-(`send:false`) → pas d'écho OSC, pas de boucle.
-
-**Correctif** — Retirer `{send:false}` des 5 ponts `set("variable_xyzpad", …)`
-(`xy_Dual1`, `xy_Dual2`, `fader_srcDual1_z`, `fader_srcDual2_z`, `multixy_1`), pour les aligner
-sur le comportement de référence de `xy_main`. Les handlers de feedback OSC en
-`{script: false, send: false}` (dans `update_*` et `variable_xyzpad`) ne sont **pas** touchés :
-le dump de SPAT atteint déjà tous les clients, les synchroniser depuis là créerait des échos.
+Les widgets `variable` acceptent **n'importe quel type sans contrôle** (`this.value = a`), donc la
+chaîne `'touch'` est stockée dans `variable_xyzpad` → le pad reçoit du non-numérique → il se clampe
+à **(-1, -1)**, systématiquement. Le correctif ci-dessus rend le ping-pong inutile ; il doit rester
+**désactivé**. (Les faders, eux, ignorent silencieusement les valeurs non numériques — seules les
+`variable` sont vulnérables.)
 
 ## Application du correctif
 
